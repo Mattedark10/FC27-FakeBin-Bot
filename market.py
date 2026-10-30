@@ -1,4 +1,5 @@
 import requests
+from datetime import datetime, timezone, timedelta
 
 
 class MarketClient:
@@ -17,7 +18,9 @@ class MarketClient:
     def get_cards(self, ids=None, platform="ps"):
 
         # ==========================================
-        # FUT.GG - 30 CARTE MOMENTUM
+        # FUT.GG MOMENTUM
+        # 6H - PAGINA 1 - SOLO SPECIALI
+        # PREZZO 300K - 3M
         # ==========================================
 
         futgg_url = (
@@ -28,7 +31,8 @@ class MarketClient:
             "hours": '"6"',
             "page": 1,
             "price__gte": 300000,
-            "price__lte": 3000000
+            "price__lte": 3000000,
+            "onlySpecialCards": "true"
         }
 
         try:
@@ -38,9 +42,11 @@ class MarketClient:
                 headers={
                     "Referer": (
                         "https://www.fut.gg/players/momentum/"
-                        "?hours=%226%22&page=1"
+                        "?hours=%226%22"
+                        "&page=1"
                         "&price__gte=300000"
                         "&price__lte=3000000"
+                        "&onlySpecialCards=true"
                     )
                 },
                 timeout=30
@@ -49,7 +55,6 @@ class MarketClient:
             print("FUT.GG HTTP:", r.status_code)
 
             r.raise_for_status()
-
             data = r.json()
 
         except Exception as e:
@@ -64,17 +69,17 @@ class MarketClient:
         self.total_momentum = len(players)
 
         print(
-            "Carte Momentum ricevute:",
+            "Carte Momentum SPECIAL ricevute:",
             self.total_momentum
         )
 
         alerts = []
 
         print()
-        print("========== CONTROLLO 6H ==========")
+        print("========== CONTROLLO SPECIAL 6H ==========")
 
         # ==========================================
-        # CONTROLLA STORICO PER OGNI EA ID
+        # PREZZO + STORICO PER OGNI CARTA
         # ==========================================
 
         for number, player in enumerate(players, 1):
@@ -86,6 +91,13 @@ class MarketClient:
             )
 
             ea_id = player.get("eaId")
+
+            rarity = (
+                player.get("rarityName")
+                or "Special"
+            )
+
+            overall = player.get("overall")
 
             if not ea_id:
                 continue
@@ -127,35 +139,121 @@ class MarketClient:
                 )
                 continue
 
-            current_price = prices[-1]
+            # ==========================================
+            # CREA COPPIE TIMESTAMP + PREZZO
+            # ==========================================
 
-            if not current_price:
+            samples = []
+
+            for timestamp, price in zip(
+                timestamps,
+                prices
+            ):
+                if not timestamp or not price:
+                    continue
+
+                try:
+                    # Timestamp numerico Unix
+                    if isinstance(
+                        timestamp,
+                        (int, float)
+                    ):
+                        dt = datetime.fromtimestamp(
+                            timestamp,
+                            tz=timezone.utc
+                        )
+
+                    # Timestamp ISO
+                    else:
+                        dt = datetime.fromisoformat(
+                            str(timestamp).replace(
+                                "Z",
+                                "+00:00"
+                            )
+                        )
+
+                        if dt.tzinfo is None:
+                            dt = dt.replace(
+                                tzinfo=timezone.utc
+                            )
+
+                    samples.append(
+                        (dt, int(price))
+                    )
+
+                except Exception:
+                    continue
+
+            if not samples:
                 continue
+
+            samples.sort(
+                key=lambda x: x[0]
+            )
+
+            current_time, current_price = (
+                samples[-1]
+            )
 
             self.with_price += 1
 
-            # Il collector salva punti orari.
-            # Per avere 6H servono almeno 7 punti:
-            #
-            # [-1] = adesso
-            # [-7] = circa 6 ore prima
+            # ==========================================
+            # CERCA IL PREZZO PIÙ VICINO A 6H FA
+            # ==========================================
 
-            if len(prices) < 7:
+            target_time = (
+                current_time
+                - timedelta(hours=6)
+            )
+
+            old_samples = [
+                sample
+                for sample in samples
+                if sample[0] <= current_time
+            ]
+
+            if not old_samples:
+                continue
+
+            closest = min(
+                old_samples,
+                key=lambda sample: abs(
+                    (
+                        sample[0]
+                        - target_time
+                    ).total_seconds()
+                )
+            )
+
+            old_time, price_6h = closest
+
+            distance = abs(
+                (
+                    old_time
+                    - target_time
+                ).total_seconds()
+            )
+
+            # Il punto deve essere abbastanza vicino
+            # alle 6 ore.
+            # Accettiamo massimo 45 minuti di differenza.
+
+            if distance > 45 * 60:
 
                 print(
                     f"{number}. {name} | "
                     f"{current_price:,} | "
-                    f"storico: {len(prices)} punti"
+                    f"{rarity} | "
+                    f"storico insufficiente"
                 )
 
                 continue
 
-            price_6h = prices[-7]
-
-            if not price_6h:
-                continue
-
             self.with_6h_history += 1
+
+            # ==========================================
+            # CALCOLO VARIAZIONE
+            # ==========================================
 
             change = (
                 (current_price - price_6h)
@@ -165,14 +263,15 @@ class MarketClient:
 
             print(
                 f"{number}. {name} | "
+                f"{rarity} | "
                 f"Now: {current_price:,} | "
                 f"6H: {price_6h:,} | "
                 f"{change:+.2f}%"
             )
 
-            # ======================================
-            # FILTRO PREZZO
-            # ======================================
+            # ==========================================
+            # PREZZO 300K - 3M
+            # ==========================================
 
             if current_price < 300000:
                 continue
@@ -180,9 +279,9 @@ class MarketClient:
             if current_price > 3000000:
                 continue
 
-            # ======================================
-            # ALERT SOLO <= -5%
-            # ======================================
+            # ==========================================
+            # DEVE ESSERE SCESA ALMENO DEL 5%
+            # ==========================================
 
             if change > -5:
                 continue
@@ -199,8 +298,8 @@ class MarketClient:
                 "id": player.get("id"),
                 "ea_id": ea_id,
                 "name": name,
-                "overall": player.get("overall"),
-                "rarity": player.get("rarityName"),
+                "overall": overall,
+                "rarity": rarity,
 
                 "market_price": int(
                     current_price
@@ -211,19 +310,18 @@ class MarketClient:
                 ),
 
                 "discount": abs(change),
-
                 "momentum": change,
 
                 "url": player_url
             })
 
+        print()
+        print("===================================")
+        print("RISULTATO SPECIAL MOMENTUM")
         print("===================================")
 
-        print()
-        print("========== RISULTATO ==========")
-
         print(
-            "Carte controllate:",
+            "Carte special controllate:",
             self.total_momentum
         )
 
@@ -242,6 +340,6 @@ class MarketClient:
             len(alerts)
         )
 
-        print("===============================")
+        print("===================================")
 
         return alerts
