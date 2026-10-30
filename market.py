@@ -1,5 +1,4 @@
 import requests
-import json
 
 
 class MarketClient:
@@ -11,7 +10,7 @@ class MarketClient:
             "Accept": "application/json",
             "Referer": (
                 "https://www.fut.gg/players/momentum/"
-                "?hours=%226%22&page=1"
+                '?hours=%226%22&page=1'
                 "&onlySpecialCards=true"
                 "&price__gte=300000"
             )
@@ -23,11 +22,13 @@ class MarketClient:
 
         url = "https://www.fut.gg/api/fut/players/v2/27/"
 
+        # IMPORTANTE:
+        # FUT.GG usa hours="6", non hours=6
         params = {
-            "hours": "6",
+            "hours": '"6"',
             "page": 1,
             "onlySpecialCards": "true",
-            "price__gte": 300000
+            "price__gte": 300000,
         }
 
         try:
@@ -38,6 +39,7 @@ class MarketClient:
             )
 
             print("FUT.GG HTTP:", response.status_code)
+            print("FUT.GG URL:", response.url)
 
             response.raise_for_status()
             data = response.json()
@@ -46,90 +48,147 @@ class MarketClient:
             print("❌ Errore FUT.GG:", e)
             return []
 
-        # Trova la lista delle carte
+        # ==========================================
+        # TROVA LISTA CARTE
+        # ==========================================
+
         players = None
-        list_name = None
 
         if isinstance(data, dict):
-            for key, value in data.items():
-                if (
-                    isinstance(value, list)
-                    and len(value) > 0
-                    and isinstance(value[0], dict)
-                ):
-                    players = value
-                    list_name = key
-                    break
+
+            if isinstance(data.get("data"), list):
+                players = data["data"]
+
+            else:
+                for value in data.values():
+                    if (
+                        isinstance(value, list)
+                        and value
+                        and isinstance(value[0], dict)
+                    ):
+                        players = value
+                        break
 
         elif isinstance(data, list):
             players = data
-            list_name = "root"
 
         if not players:
-            print("❌ Nessuna carta trovata.")
+            print("❌ Nessuna carta trovata")
             return []
 
         self.total_momentum = len(players)
 
-        print("Lista trovata in:", list_name)
         print("Carte Momentum ricevute:", len(players))
 
         # ==========================================
-        # DEBUG PRIMA CARTA
+        # CONTROLLO CAMPI MOMENTUM
         # ==========================================
 
         print()
-        print("========== DEBUG PRIMA CARTA ==========")
+        print("========== MOMENTUM DATA ==========")
 
-        try:
-            print(
-                json.dumps(
-                    players[0],
-                    indent=2,
-                    ensure_ascii=False
-                )
-            )
-        except Exception as e:
-            print("Errore debug:", e)
-            print(players[0])
-
-        print("=======================================")
-        print()
-
-        # ==========================================
-        # CHIAVI PRIMA CARTA
-        # ==========================================
-
-        if isinstance(players[0], dict):
-            print("========== CHIAVI PRIMA CARTA ==========")
-
-            for key in players[0].keys():
-                print("-", key)
-
-            print("========================================")
-            print()
-
-        # ==========================================
-        # MOSTRA GLI ID
-        # ==========================================
-
-        print("========== ID CARTE ==========")
+        valid = 0
 
         for i, player in enumerate(players, 1):
 
-            player_id = (
-                player.get("id")
-                or player.get("player_id")
-                or player.get("ea_id")
+            name = (
+                player.get("commonName")
+                or player.get("cardName")
+                or "Unknown"
             )
 
-            print(f"{i}. ID: {player_id}")
+            player_id = player.get("id")
 
-        print("==============================")
+            price = player.get("currentDbPrice")
+            momentum = player.get("momentumPercentage")
 
-        # Per adesso NON proviamo a inventare
-        # prezzo/variazione 6h.
-        #
-        # Appena vediamo il JSON della prima carta
-        # colleghiamo i campi corretti.
-        return []
+            print(
+                f"{i}. {name} | "
+                f"ID: {player_id} | "
+                f"Price: {price} | "
+                f"6H: {momentum}"
+            )
+
+            if price is not None and momentum is not None:
+                valid += 1
+
+        print("===================================")
+        print("Carte con dati Momentum:", valid)
+        print()
+
+        # ==========================================
+        # CREA ALERT
+        # ==========================================
+
+        cards = []
+
+        for player in players:
+
+            price = player.get("currentDbPrice")
+            momentum = player.get("momentumPercentage")
+
+            if price is None or momentum is None:
+                continue
+
+            try:
+                price = int(price)
+                momentum = float(momentum)
+            except (TypeError, ValueError):
+                continue
+
+            # Fascia richiesta
+            if price < 300000:
+                continue
+
+            if price > 3000000:
+                continue
+
+            # Ci interessano solo cali >= 5%
+            if momentum > -5:
+                continue
+
+            name = (
+                player.get("commonName")
+                or player.get("cardName")
+                or "Unknown"
+            )
+
+            # Se il prezzo è sceso del X%,
+            # ricaviamo circa il prezzo precedente.
+            #
+            # Esempio:
+            # 475k dopo -5% -> riferimento 500k
+
+            multiplier = 1 + (momentum / 100)
+
+            if multiplier <= 0:
+                continue
+
+            reference_price = int(
+                price / multiplier
+            )
+
+            discount = abs(momentum)
+
+            cards.append({
+                "id": player.get("id"),
+                "ea_id": player.get("eaId"),
+                "name": name,
+                "overall": player.get("overall"),
+                "rarity": player.get("rarityName"),
+                "market_price": price,
+                "reference_price": reference_price,
+                "discount": discount,
+                "momentum": momentum,
+                "url": (
+                    "https://www.fut.gg"
+                    + player.get("url", "")
+                )
+            })
+
+        print("========== RISULTATO ==========")
+        print("Carte controllate:", len(players))
+        print("Carte >= -5%:", len(cards))
+        print("===============================")
+
+        return cards
