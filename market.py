@@ -1,38 +1,26 @@
 import requests
-import json
 
 
 class MarketClient:
     def __init__(self):
         self.session = requests.Session()
 
-        self.page_url = (
-            "https://www.fut.gg/players/momentum/"
-            "?hours=%226%22"
-            "&page=1"
-            "&price__gte=300000"
-            "&price__lte=3000000"
-        )
-
         self.session.headers.update({
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/141.0.0.0 Safari/537.36"
-            ),
-            "Accept": "application/json",
-            "Referer": self.page_url
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json"
         })
 
         self.total_momentum = 0
+        self.with_price = 0
+        self.with_6h_history = 0
 
     def get_cards(self, ids=None, platform="ps"):
 
         # ==========================================
-        # 1. PRENDE LE 30 CARTE MOMENTUM
+        # FUT.GG - 30 CARTE MOMENTUM
         # ==========================================
 
-        players_url = (
+        futgg_url = (
             "https://www.fut.gg/api/fut/players/v2/27/"
         )
 
@@ -44,22 +32,28 @@ class MarketClient:
         }
 
         try:
-            response = self.session.get(
-                players_url,
+            r = self.session.get(
+                futgg_url,
                 params=params,
+                headers={
+                    "Referer": (
+                        "https://www.fut.gg/players/momentum/"
+                        "?hours=%226%22&page=1"
+                        "&price__gte=300000"
+                        "&price__lte=3000000"
+                    )
+                },
                 timeout=30
             )
 
-            print("========== MOMENTUM ==========")
-            print("HTTP:", response.status_code)
-            print("URL:", response.url)
+            print("FUT.GG HTTP:", r.status_code)
 
-            response.raise_for_status()
+            r.raise_for_status()
 
-            data = response.json()
+            data = r.json()
 
         except Exception as e:
-            print("❌ Errore Momentum:", e)
+            print("❌ Errore FUT.GG:", e)
             return []
 
         players = data.get("data", [])
@@ -69,165 +63,185 @@ class MarketClient:
 
         self.total_momentum = len(players)
 
-        print("Carte ricevute:", len(players))
-        print("==============================")
+        print(
+            "Carte Momentum ricevute:",
+            self.total_momentum
+        )
+
+        alerts = []
+
         print()
-
-        if not players:
-            return []
+        print("========== CONTROLLO 6H ==========")
 
         # ==========================================
-        # 2. PRENDE GLI EA ID
+        # CONTROLLA STORICO PER OGNI EA ID
         # ==========================================
 
-        ea_ids = []
+        for number, player in enumerate(players, 1):
 
-        for player in players:
+            name = (
+                player.get("commonName")
+                or player.get("cardName")
+                or "Unknown"
+            )
 
             ea_id = player.get("eaId")
 
-            if ea_id is not None:
-                ea_ids.append(str(ea_id))
+            if not ea_id:
+                continue
 
-        print("========== EA IDs ==========")
-
-        for i, ea_id in enumerate(ea_ids, 1):
-            print(f"{i}. {ea_id}")
-
-        print("============================")
-        print()
-
-        if not ea_ids:
-            print("❌ Nessun EA ID trovato")
-            return []
-
-        # ==========================================
-        # 3. TEST API PREZZI
-        # ==========================================
-
-        print("========== TEST PLAYER-PRICES ==========")
-
-        # Prima proviamo tutti gli ID insieme
-        ids_string = ",".join(ea_ids)
-
-        price_tests = [
-            (
-                "TEST A",
-                "https://www.fut.gg/api/fut/player-prices/27/",
-                {
-                    "ids": ids_string
-                }
-            ),
-
-            (
-                "TEST B",
-                "https://www.fut.gg/api/fut/player-prices/27/",
-                {
-                    "ids": ea_ids[0]
-                }
-            ),
-
-            (
-                "TEST C",
-                (
-                    "https://www.fut.gg/api/fut/"
-                    f"player-prices/27/{ea_ids[0]}/"
-                ),
-                None
+            history_url = (
+                f"https://fc27-market.val.run/"
+                f"history/{ea_id}"
             )
-        ]
-
-        for test_name, url, test_params in price_tests:
-
-            print()
-            print("--------------------------------")
-            print(test_name)
-            print("--------------------------------")
 
             try:
-                r = self.session.get(
-                    url,
-                    params=test_params,
-                    timeout=30
+                h = self.session.get(
+                    history_url,
+                    timeout=20
                 )
 
-                print("HTTP:", r.status_code)
-                print("URL:", r.url)
-                print(
-                    "Content-Type:",
-                    r.headers.get("content-type")
-                )
+                if not h.ok:
+                    print(
+                        f"{number}. {name} | "
+                        f"History HTTP {h.status_code}"
+                    )
+                    continue
 
-                # Non stampiamo una risposta gigantesca
-                text = r.text
-
-                print("Lunghezza risposta:", len(text))
-
-                print()
-                print("RISPOSTA:")
-                print(text[:3000])
-
-                # Se è JSON, mostriamo anche
-                # la struttura principale
-                try:
-                    price_data = r.json()
-
-                    print()
-                    print("TIPO JSON:", type(price_data).__name__)
-
-                    if isinstance(price_data, dict):
-
-                        print(
-                            "CHIAVI JSON:",
-                            list(price_data.keys())
-                        )
-
-                        print()
-                        print("JSON FORMATTATO:")
-
-                        print(
-                            json.dumps(
-                                price_data,
-                                indent=2,
-                                ensure_ascii=False
-                            )[:5000]
-                        )
-
-                    elif isinstance(price_data, list):
-
-                        print(
-                            "ELEMENTI JSON:",
-                            len(price_data)
-                        )
-
-                        if price_data:
-                            print()
-                            print("PRIMO ELEMENTO:")
-
-                            print(
-                                json.dumps(
-                                    price_data[0],
-                                    indent=2,
-                                    ensure_ascii=False
-                                )[:5000]
-                            )
-
-                except Exception:
-                    print("La risposta non è JSON.")
+                history = h.json()
 
             except Exception as e:
+                print(
+                    f"{number}. {name} | "
+                    f"Errore history: {e}"
+                )
+                continue
+
+            timestamps = history.get("t", [])
+            prices = history.get("p", [])
+
+            if not prices:
+                print(
+                    f"{number}. {name} | "
+                    "nessun prezzo"
+                )
+                continue
+
+            current_price = prices[-1]
+
+            if not current_price:
+                continue
+
+            self.with_price += 1
+
+            # Il collector salva punti orari.
+            # Per avere 6H servono almeno 7 punti:
+            #
+            # [-1] = adesso
+            # [-7] = circa 6 ore prima
+
+            if len(prices) < 7:
 
                 print(
-                    "❌ Errore:",
-                    type(e).__name__,
-                    str(e)
+                    f"{number}. {name} | "
+                    f"{current_price:,} | "
+                    f"storico: {len(prices)} punti"
                 )
 
-        print()
-        print("========================================")
-        print("TEST PREZZI COMPLETATO")
-        print("========================================")
+                continue
 
-        # IMPORTANTE:
-        # ancora nessun alert reale.
-        return []
+            price_6h = prices[-7]
+
+            if not price_6h:
+                continue
+
+            self.with_6h_history += 1
+
+            change = (
+                (current_price - price_6h)
+                / price_6h
+                * 100
+            )
+
+            print(
+                f"{number}. {name} | "
+                f"Now: {current_price:,} | "
+                f"6H: {price_6h:,} | "
+                f"{change:+.2f}%"
+            )
+
+            # ======================================
+            # FILTRO PREZZO
+            # ======================================
+
+            if current_price < 300000:
+                continue
+
+            if current_price > 3000000:
+                continue
+
+            # ======================================
+            # ALERT SOLO <= -5%
+            # ======================================
+
+            if change > -5:
+                continue
+
+            path = player.get("url", "")
+
+            player_url = (
+                "https://www.fut.gg" + path
+                if path.startswith("/")
+                else path
+            )
+
+            alerts.append({
+                "id": player.get("id"),
+                "ea_id": ea_id,
+                "name": name,
+                "overall": player.get("overall"),
+                "rarity": player.get("rarityName"),
+
+                "market_price": int(
+                    current_price
+                ),
+
+                "reference_price": int(
+                    price_6h
+                ),
+
+                "discount": abs(change),
+
+                "momentum": change,
+
+                "url": player_url
+            })
+
+        print("===================================")
+
+        print()
+        print("========== RISULTATO ==========")
+
+        print(
+            "Carte controllate:",
+            self.total_momentum
+        )
+
+        print(
+            "Con prezzo:",
+            self.with_price
+        )
+
+        print(
+            "Con storico 6H:",
+            self.with_6h_history
+        )
+
+        print(
+            "Occasioni <= -5%:",
+            len(alerts)
+        )
+
+        print("===============================")
+
+        return alerts
