@@ -28,9 +28,14 @@ class MarketClient:
 
     def get_cards(self, ids=None, platform="ps"):
 
-        url = "https://www.fut.gg/api/fut/players/v2/27/"
+        # ==========================================
+        # 1. PRENDE LE 30 CARTE MOMENTUM
+        # ==========================================
 
-        # ESATTAMENTE i filtri del link FUT.GG
+        players_url = (
+            "https://www.fut.gg/api/fut/players/v2/27/"
+        )
+
         params = {
             "hours": '"6"',
             "page": 1,
@@ -38,225 +43,191 @@ class MarketClient:
             "price__lte": 3000000
         }
 
-        print("================================")
-        print("FUT.GG MOMENTUM 6H")
-        print("Prezzo: 300,000 - 3,000,000")
-        print("Pagina: 1")
-        print("================================")
-
         try:
             response = self.session.get(
-                url,
+                players_url,
                 params=params,
                 timeout=30
             )
 
-            print("FUT.GG HTTP:", response.status_code)
-            print("FUT.GG URL:", response.url)
+            print("========== MOMENTUM ==========")
+            print("HTTP:", response.status_code)
+            print("URL:", response.url)
 
             response.raise_for_status()
 
             data = response.json()
 
         except Exception as e:
-            print("❌ Errore richiesta FUT.GG:", e)
-            self.total_momentum = 0
+            print("❌ Errore Momentum:", e)
             return []
 
-        # ==========================================
-        # TROVA LE CARTE
-        # ==========================================
+        players = data.get("data", [])
 
-        players = []
-
-        if isinstance(data, dict):
-
-            if isinstance(data.get("data"), list):
-                players = data["data"]
-
-            else:
-                for key, value in data.items():
-
-                    if (
-                        isinstance(value, list)
-                        and value
-                        and isinstance(value[0], dict)
-                    ):
-                        players = value
-                        print("Lista trovata in:", key)
-                        break
-
-        elif isinstance(data, list):
-            players = data
+        if not isinstance(players, list):
+            players = []
 
         self.total_momentum = len(players)
 
+        print("Carte ricevute:", len(players))
+        print("==============================")
         print()
-        print("Carte Momentum ricevute:", len(players))
 
         if not players:
-            print("❌ Nessuna carta ricevuta.")
             return []
 
         # ==========================================
-        # CONTROLLA I DATI RESTITUITI DA FUT.GG
+        # 2. PRENDE GLI EA ID
         # ==========================================
 
-        print()
-        print("========== MOMENTUM 6H ==========")
+        ea_ids = []
 
-        cards_with_price = 0
-        cards_with_momentum = 0
-        cards_complete = 0
+        for player in players:
 
-        alerts = []
-
-        for number, player in enumerate(players, start=1):
-
-            if not isinstance(player, dict):
-                continue
-
-            name = (
-                player.get("commonName")
-                or player.get("cardName")
-                or player.get("lastName")
-                or "Unknown"
-            )
-
-            player_id = player.get("id")
             ea_id = player.get("eaId")
 
-            price = player.get("currentDbPrice")
-            momentum = player.get("momentumPercentage")
+            if ea_id is not None:
+                ea_ids.append(str(ea_id))
 
-            # Alcune risposte potrebbero usare price
-            # invece di currentDbPrice.
-            if price is None:
-                raw_price = player.get("price")
+        print("========== EA IDs ==========")
 
-                if isinstance(raw_price, (int, float)):
-                    price = raw_price
+        for i, ea_id in enumerate(ea_ids, 1):
+            print(f"{i}. {ea_id}")
 
-            if price is not None:
-                cards_with_price += 1
+        print("============================")
+        print()
 
-            if momentum is not None:
-                cards_with_momentum += 1
+        if not ea_ids:
+            print("❌ Nessun EA ID trovato")
+            return []
 
-            if price is not None and momentum is not None:
-                cards_complete += 1
+        # ==========================================
+        # 3. TEST API PREZZI
+        # ==========================================
 
-            print(
-                f"{number}. {name} | "
-                f"ID: {player_id} | "
-                f"EA ID: {ea_id} | "
-                f"Price: {price} | "
-                f"6H: {momentum}"
+        print("========== TEST PLAYER-PRICES ==========")
+
+        # Prima proviamo tutti gli ID insieme
+        ids_string = ",".join(ea_ids)
+
+        price_tests = [
+            (
+                "TEST A",
+                "https://www.fut.gg/api/fut/player-prices/27/",
+                {
+                    "ids": ids_string
+                }
+            ),
+
+            (
+                "TEST B",
+                "https://www.fut.gg/api/fut/player-prices/27/",
+                {
+                    "ids": ea_ids[0]
+                }
+            ),
+
+            (
+                "TEST C",
+                (
+                    "https://www.fut.gg/api/fut/"
+                    f"player-prices/27/{ea_ids[0]}/"
+                ),
+                None
             )
+        ]
 
-            # ======================================
-            # SERVONO PREZZO + MOMENTUM
-            # ======================================
+        for test_name, url, test_params in price_tests:
 
-            if price is None or momentum is None:
-                continue
+            print()
+            print("--------------------------------")
+            print(test_name)
+            print("--------------------------------")
 
             try:
-                price = int(float(price))
-                momentum = float(momentum)
+                r = self.session.get(
+                    url,
+                    params=test_params,
+                    timeout=30
+                )
 
-            except (TypeError, ValueError):
+                print("HTTP:", r.status_code)
+                print("URL:", r.url)
                 print(
-                    f"⚠️ Dati non validi per {name}: "
-                    f"{price} / {momentum}"
+                    "Content-Type:",
+                    r.headers.get("content-type")
                 )
-                continue
 
-            # ======================================
-            # PREZZO 300K - 3M
-            # ======================================
+                # Non stampiamo una risposta gigantesca
+                text = r.text
 
-            if price < 300000:
-                continue
+                print("Lunghezza risposta:", len(text))
 
-            if price > 3000000:
-                continue
+                print()
+                print("RISPOSTA:")
+                print(text[:3000])
 
-            # ======================================
-            # CALO MINIMO -5%
-            # ======================================
+                # Se è JSON, mostriamo anche
+                # la struttura principale
+                try:
+                    price_data = r.json()
 
-            if momentum > -5:
-                continue
+                    print()
+                    print("TIPO JSON:", type(price_data).__name__)
 
-            # Esempio:
-            # prezzo attuale 475k
-            # momentum -5%
-            #
-            # riferimento ≈ 500k
+                    if isinstance(price_data, dict):
 
-            multiplier = 1 + (momentum / 100)
+                        print(
+                            "CHIAVI JSON:",
+                            list(price_data.keys())
+                        )
 
-            if multiplier <= 0:
-                continue
+                        print()
+                        print("JSON FORMATTATO:")
 
-            reference_price = round(
-                price / multiplier
-            )
+                        print(
+                            json.dumps(
+                                price_data,
+                                indent=2,
+                                ensure_ascii=False
+                            )[:5000]
+                        )
 
-            discount = abs(momentum)
+                    elif isinstance(price_data, list):
 
-            player_path = player.get("url", "")
+                        print(
+                            "ELEMENTI JSON:",
+                            len(price_data)
+                        )
 
-            if player_path.startswith("/"):
-                player_url = (
-                    "https://www.fut.gg"
-                    + player_path
+                        if price_data:
+                            print()
+                            print("PRIMO ELEMENTO:")
+
+                            print(
+                                json.dumps(
+                                    price_data[0],
+                                    indent=2,
+                                    ensure_ascii=False
+                                )[:5000]
+                            )
+
+                except Exception:
+                    print("La risposta non è JSON.")
+
+            except Exception as e:
+
+                print(
+                    "❌ Errore:",
+                    type(e).__name__,
+                    str(e)
                 )
-            else:
-                player_url = player_path
-
-            alerts.append({
-                "id": player_id,
-                "ea_id": ea_id,
-                "name": name,
-                "overall": player.get("overall"),
-                "rarity": player.get("rarityName"),
-                "market_price": price,
-                "reference_price": reference_price,
-                "discount": discount,
-                "momentum": momentum,
-                "url": player_url
-            })
-
-        print("=================================")
-
-        # ==========================================
-        # RISULTATO
-        # ==========================================
 
         print()
-        print("========== RISULTATO ==========")
-        print(
-            "Carte controllate:",
-            self.total_momentum
-        )
-        print(
-            "Con prezzo:",
-            cards_with_price
-        )
-        print(
-            "Con Momentum 6H:",
-            cards_with_momentum
-        )
-        print(
-            "Con entrambi:",
-            cards_complete
-        )
-        print(
-            "Occasioni <= -5%:",
-            len(alerts)
-        )
-        print("===============================")
+        print("========================================")
+        print("TEST PREZZI COMPLETATO")
+        print("========================================")
 
-        return alerts
+        # IMPORTANTE:
+        # ancora nessun alert reale.
+        return []
