@@ -1,113 +1,135 @@
 import requests
+import json
 
 
 class MarketClient:
-    FUTGG_URL = "https://www.fut.gg/api/fut/players/v2/27/"
-
     def __init__(self):
         self.session = requests.Session()
+
         self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/130 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Referer": "https://www.fut.gg/players/momentum/?hours=%226%22&page=1&onlySpecialCards=true&price__gte=300000",
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json",
+            "Referer": (
+                "https://www.fut.gg/players/momentum/"
+                "?hours=%226%22&page=1"
+                "&onlySpecialCards=true"
+                "&price__gte=300000"
+            )
         })
 
-    @staticmethod
-    def _num(value):
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            return float(value)
-        if isinstance(value, str):
-            s = value.strip().replace(",", "").replace("%", "")
-            try:
-                return float(s)
-            except ValueError:
-                return None
-        return None
-
-    @classmethod
-    def _find_value(cls, obj, keys):
-        """Cerca ricorsivamente la prima chiave utile anche dentro oggetti annidati."""
-        if isinstance(obj, dict):
-            lowered = {str(k).lower(): v for k, v in obj.items()}
-            for key in keys:
-                if key.lower() in lowered:
-                    value = lowered[key.lower()]
-                    if value is not None:
-                        return value
-            for value in obj.values():
-                found = cls._find_value(value, keys)
-                if found is not None:
-                    return found
-        elif isinstance(obj, list):
-            for value in obj:
-                found = cls._find_value(value, keys)
-                if found is not None:
-                    return found
-        return None
-
-    @staticmethod
-    def _player_list(data):
-        if isinstance(data, list):
-            return data
-        if not isinstance(data, dict):
-            return []
-        # Prima prova i nomi più comuni, poi qualunque lista di dict.
-        for key in ("results", "players", "items", "data"):
-            value = data.get(key)
-            if isinstance(value, list) and value and isinstance(value[0], dict):
-                return value
-            if isinstance(value, dict):
-                nested = MarketClient._player_list(value)
-                if nested:
-                    return nested
-        for value in data.values():
-            if isinstance(value, list) and value and isinstance(value[0], dict):
-                return value
-        return []
+        self.total_momentum = 0
 
     def get_cards(self, ids=None, platform="ps"):
+
+        url = "https://www.fut.gg/api/fut/players/v2/27/"
+
         params = {
             "hours": "6",
             "page": 1,
             "onlySpecialCards": "true",
-            "price__gte": 300000,
-            "price__lte": 3000000,
+            "price__gte": 300000
         }
-        r = self.session.get(self.FUTGG_URL, params=params, timeout=30)
-        print("FUT.GG HTTP:", r.status_code)
-        r.raise_for_status()
-        raw_players = self._player_list(r.json())
-        print("Carte Momentum ricevute:", len(raw_players))
 
-        cards = []
-        for p in raw_players:
-            player_id = self._find_value(p, ["id", "player_id", "playerId", "ea_id", "eaId"])
-            name = self._find_value(p, ["name", "display_name", "displayName", "common_name", "commonName"])
-            price = self._num(self._find_value(p, [
-                "price", "price_ps", "pricePs", "current_price", "currentPrice",
-                "market_price", "marketPrice", "lowest_price", "lowestPrice"
-            ]))
-            change = self._num(self._find_value(p, [
-                "price_change_percent", "priceChangePercent", "change_percent", "changePercent",
-                "percentage_change", "percentageChange", "percent_change", "percentChange",
-                "price_change", "priceChange", "momentum"
-            ]))
+        try:
+            response = self.session.get(
+                url,
+                params=params,
+                timeout=30
+            )
 
-            # Alcune API esprimono -5% come -0.05.
-            if change is not None and -1 < change < 1 and change != 0:
-                change *= 100
+            print("FUT.GG HTTP:", response.status_code)
 
-            if player_id is None or price is None or change is None:
-                continue
-            if not (300000 <= price <= 3000000):
-                continue
+            response.raise_for_status()
+            data = response.json()
 
-            cards.append({
-                "id": str(player_id),
-                "name": str(name or f"Player {player_id}"),
-                "market_price": int(price),
-                "change_6h": float(change),
-            })
+        except Exception as e:
+            print("❌ Errore FUT.GG:", e)
+            return []
 
-        print("Carte con prezzo + variazione 6h leggibili:", len(cards))
-        return cards
+        # Trova la lista delle carte
+        players = None
+        list_name = None
+
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if (
+                    isinstance(value, list)
+                    and len(value) > 0
+                    and isinstance(value[0], dict)
+                ):
+                    players = value
+                    list_name = key
+                    break
+
+        elif isinstance(data, list):
+            players = data
+            list_name = "root"
+
+        if not players:
+            print("❌ Nessuna carta trovata.")
+            return []
+
+        self.total_momentum = len(players)
+
+        print("Lista trovata in:", list_name)
+        print("Carte Momentum ricevute:", len(players))
+
+        # ==========================================
+        # DEBUG PRIMA CARTA
+        # ==========================================
+
+        print()
+        print("========== DEBUG PRIMA CARTA ==========")
+
+        try:
+            print(
+                json.dumps(
+                    players[0],
+                    indent=2,
+                    ensure_ascii=False
+                )
+            )
+        except Exception as e:
+            print("Errore debug:", e)
+            print(players[0])
+
+        print("=======================================")
+        print()
+
+        # ==========================================
+        # CHIAVI PRIMA CARTA
+        # ==========================================
+
+        if isinstance(players[0], dict):
+            print("========== CHIAVI PRIMA CARTA ==========")
+
+            for key in players[0].keys():
+                print("-", key)
+
+            print("========================================")
+            print()
+
+        # ==========================================
+        # MOSTRA GLI ID
+        # ==========================================
+
+        print("========== ID CARTE ==========")
+
+        for i, player in enumerate(players, 1):
+
+            player_id = (
+                player.get("id")
+                or player.get("player_id")
+                or player.get("ea_id")
+            )
+
+            print(f"{i}. ID: {player_id}")
+
+        print("==============================")
+
+        # Per adesso NON proviamo a inventare
+        # prezzo/variazione 6h.
+        #
+        # Appena vediamo il JSON della prima carta
+        # colleghiamo i campi corretti.
+        return []
